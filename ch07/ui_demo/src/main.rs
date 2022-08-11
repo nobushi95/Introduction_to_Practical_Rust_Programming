@@ -11,7 +11,7 @@ const FONT: Font = Font::External {
 fn main() -> iced::Result {
     let mut settings = Settings::default();
     settings.window.size = (400u32, 120u32);
-    GUI::run(settings);
+    GUI::run(settings)
 }
 
 struct GUI {
