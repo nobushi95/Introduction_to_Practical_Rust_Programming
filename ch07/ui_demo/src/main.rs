@@ -2,11 +2,18 @@ use iced::{
     button, executor, Align, Application, Button, Clipboard, Column, Command, Element, Font,
     HorizontalAlignment, Length, Row, Settings, Text,
 };
+use iced_futures::{self, futures};
+use std::time::{Duration, Instant};
 
 const FONT: Font = Font::External {
     name: "PixelMplus12-Regular",
     bytes: include_bytes!("../rsc/PixelMplus12-Regular.ttf"),
 };
+
+const FPS: u64 = 30;
+const MILLISEC: u64 = 1000;
+const MINUTE: u64 = 60;
+const HOUR: u64 = 60 * MINUTE;
 
 fn main() -> iced::Result {
     let mut settings = Settings::default();
@@ -15,6 +22,8 @@ fn main() -> iced::Result {
 }
 
 struct GUI {
+    last_update: Instant,
+    total_duration: Duration,
     tick_state: TickState,
     start_stop_button_state: button::State,
     reset_button_state: button::State,
@@ -30,6 +39,7 @@ pub enum Message {
     Start,
     Stop,
     Reset,
+    Update,
 }
 
 impl Application for GUI {
@@ -43,6 +53,8 @@ impl Application for GUI {
     fn new(flags: Self::Flags) -> (Self, Command<Self::Message>) {
         (
             GUI {
+                last_update: Instant::now(),
+                total_duration: Duration::default(),
                 tick_state: TickState::Stopped,
                 start_stop_button_state: button::State::new(),
                 reset_button_state: button::State::new(),
@@ -61,15 +73,44 @@ impl Application for GUI {
         clipboard: &mut Clipboard,
     ) -> Command<Self::Message> {
         match message {
-            Message::Start => self.tick_state = TickState::Ticking,
-            Message::Stop => self.tick_state = TickState::Stopped,
-            Message::Reset => {}
+            Message::Start => {
+                self.tick_state = TickState::Ticking;
+                self.last_update = Instant::now();
+            }
+            Message::Stop => {
+                self.tick_state = TickState::Stopped;
+                self.total_duration += Instant::now() - self.last_update;
+            }
+            Message::Reset => {
+                self.last_update = Instant::now();
+                self.total_duration = Duration::default();
+            }
+            Message::Update => match self.tick_state {
+                TickState::Ticking => {
+                    let now_update = Instant::now();
+                    self.total_duration += now_update - self.last_update;
+                    self.last_update = now_update;
+                }
+                _ => {}
+            },
         }
         Command::none()
     }
 
+    fn subscription(&self) -> iced::Subscription<Self::Message> {
+        let timer = Timer::new(Duration::from_millis(MILLISEC / FPS));
+        iced::Subscription::from_recipe(timer).map(|_| Message::Update)
+    }
+
     fn view(&mut self) -> Element<'_, Self::Message> {
-        let duration_text = "00:00:00.00";
+        let seconds = self.total_duration.as_secs();
+        let duration_text = format!(
+            "{:0>2}:{:0>2}:{:0>2}.{:0>2}",
+            seconds / HOUR,
+            (seconds % HOUR) / MINUTE,
+            seconds % MINUTE,
+            self.total_duration.subsec_millis() / 10,
+        );
 
         let start_stop_text = match self.tick_state {
             TickState::Stopped => Text::new("Start")
@@ -113,5 +154,38 @@ impl Application for GUI {
             .height(Length::Fill)
             .align_items(Align::Center)
             .into()
+    }
+}
+
+pub struct Timer {
+    duration: Duration,
+}
+
+impl Timer {
+    fn new(duration: Duration) -> Timer {
+        Timer { duration }
+    }
+}
+
+impl<H, E> iced_native::subscription::Recipe<H, E> for Timer
+where
+    H: std::hash::Hasher,
+{
+    type Output = Instant;
+
+    fn hash(&self, state: &mut H) {
+        use std::hash::Hash;
+        std::any::TypeId::of::<Self>().hash(state);
+        self.duration.hash(state);
+    }
+
+    fn stream(
+        self: Box<Self>,
+        input: iced_futures::BoxStream<E>,
+    ) -> iced_futures::BoxStream<Self::Output> {
+        use futures::stream::StreamExt;
+        async_std::stream::interval(self.duration)
+            .map(|_| Instant::now())
+            .boxed()
     }
 }
